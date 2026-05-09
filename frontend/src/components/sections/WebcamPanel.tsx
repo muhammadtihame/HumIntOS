@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Camera, ScanFace, Focus, Fingerprint, Crosshair, ArrowUpRight } from 'lucide-react';
 import { useCognitive } from '../../context/CognitiveContext';
+import type { EmotionAnalysisResponse } from '../../services/humintosApi';
 import { cn } from '../../lib/utils';
 
 type CameraStatus = 'starting' | 'active' | 'unavailable';
@@ -10,43 +11,54 @@ type GazePoint = {
   x: number;
   y: number;
   confidence: number;
-  source: 'webgazer' | 'pending' | 'unavailable';
+  source: 'face-mesh' | 'face-detection' | 'pending' | 'unavailable';
 };
 
-declare global {
-  interface Window {
-    webgazer?: {
-      begin: () => Promise<void> | void;
-      setGazeListener: (listener: (data: { x: number; y: number } | null) => void) => Window['webgazer'];
-      clearGazeListener?: () => void;
-      showVideo?: (show: boolean) => Window['webgazer'];
-      showFaceOverlay?: (show: boolean) => Window['webgazer'];
-      showFaceFeedbackBox?: (show: boolean) => Window['webgazer'];
-      pause?: () => void;
-    };
-  }
-}
+const CALIBRATION_DURATION_MS = 25_000;
+const GAZE_DISPLAY_RANGE = 40;
 
-const loadWebGazer = () =>
-  new Promise<void>((resolve, reject) => {
-    if (window.webgazer) {
-      resolve();
-      return;
-    }
-    const existing = document.querySelector<HTMLScriptElement>('script[data-humintos-webgazer]');
-    if (existing) {
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener('error', () => reject(new Error('WebGazer failed to load.')), { once: true });
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = 'https://webgazer.cs.brown.edu/webgazer.js';
-    script.async = true;
-    script.dataset.humintosWebgazer = 'true';
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error('WebGazer failed to load.'));
-    document.head.appendChild(script);
-  });
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const clamp01 = (value: number) => clamp(value, 0, 1);
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+const gazeFromEmotion = (emotion: EmotionAnalysisResponse): GazePoint => {
+  const x = isFiniteNumber(emotion.gaze_x) ? clamp(emotion.gaze_x, -1, 1) : 0;
+  const y = isFiniteNumber(emotion.gaze_y) ? clamp(emotion.gaze_y, -1, 1) : 0;
+  const confidence = isFiniteNumber(emotion.face_confidence)
+    ? emotion.face_confidence
+    : isFiniteNumber(emotion.eye_openness)
+      ? emotion.eye_openness
+      : emotion.face_detected
+        ? emotion.confidence
+        : 0;
+
+  return {
+    x,
+    y,
+    confidence: clamp01(confidence),
+    source: emotion.landmarks_detected ? 'face-mesh' : emotion.face_detected ? 'face-detection' : 'unavailable',
+  };
+};
+
+const microExpressionLabel = (emotion: EmotionAnalysisResponse | null) => {
+  if (!emotion) return 'pending';
+  if (!emotion.face_detected) return 'seeking face';
+  if (!emotion.landmarks_detected) return emotion.emotion || 'face lock';
+
+  const brow = emotion.brow_lift ?? 0;
+  const curve = emotion.mouth_curve ?? 0.5;
+  const mouth = emotion.mouth_open ?? 0;
+  const eyes = emotion.eye_openness ?? 0.5;
+
+  if (curve > 0.64 && mouth < 0.34) return 'micro-smile';
+  if (curve < 0.38 && brow > 0.45) return 'brow tension';
+  if (brow > 0.62) return 'brow lift';
+  if (mouth > 0.42) return 'mouth aperture';
+  if (eyes < 0.32) return 'slow blink';
+  if (emotion.emotion === 'focused') return 'steady focus';
+  if (emotion.emotion === 'calm') return 'soft focus';
+  return 'neutral gaze';
+};
 
 export const WebcamPanel = () => {
   const {
@@ -66,6 +78,8 @@ export const WebcamPanel = () => {
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>('starting');
   const [analysisSource, setAnalysisSource] = useState('syncing');
   const [gaze, setGaze] = useState<GazePoint>({ x: 0, y: 0, confidence: 0, source: 'pending' });
+  const [webcamEmotion, setWebcamEmotion] = useState<EmotionAnalysisResponse | null>(null);
+  const [calibrationProgress, setCalibrationProgress] = useState(0);
 
   useEffect(() => {
     dataRef.current = data;
@@ -74,6 +88,23 @@ export const WebcamPanel = () => {
   useEffect(() => {
     gazeRef.current = gaze;
   }, [gaze]);
+
+  useEffect(() => {
+    if (cameraStatus !== 'active') {
+      setCalibrationProgress(0);
+      return;
+    }
+
+    const startedAt = performance.now();
+    const tick = () => {
+      const elapsed = performance.now() - startedAt;
+      setCalibrationProgress(clamp((elapsed / CALIBRATION_DURATION_MS) * 100, 0, 100));
+    };
+
+    tick();
+    const interval = window.setInterval(tick, 250);
+    return () => window.clearInterval(interval);
+  }, [cameraStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,41 +145,6 @@ export const WebcamPanel = () => {
   }, [addLog]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const startWebGazer = async () => {
-      try {
-        await loadWebGazer();
-        if (cancelled || !window.webgazer) return;
-        window.webgazer
-          .showVideo?.(false)
-          ?.showFaceOverlay?.(false)
-          ?.showFaceFeedbackBox?.(false)
-          ?.setGazeListener((prediction) => {
-            if (!prediction) return;
-            const x = prediction.x - window.innerWidth / 2;
-            const y = prediction.y - window.innerHeight / 2;
-            const displayX = Math.max(-40, Math.min(40, (x / Math.max(1, window.innerWidth / 2)) * 40));
-            const displayY = Math.max(-40, Math.min(40, (y / Math.max(1, window.innerHeight / 2)) * 40));
-            setGaze({ x: displayX, y: displayY, confidence: 1, source: 'webgazer' });
-          });
-        await window.webgazer.begin();
-      } catch {
-        setGaze({ x: 0, y: 0, confidence: 0, source: 'unavailable' });
-        addLog('WebGazer eye-tracking unavailable in this browser session.');
-      }
-    };
-
-    void startWebGazer();
-
-    return () => {
-      cancelled = true;
-      window.webgazer?.clearGazeListener?.();
-      window.webgazer?.pause?.();
-    };
-  }, [addLog]);
-
-  useEffect(() => {
     if (cameraStatus !== 'active') return;
     let busy = false;
 
@@ -170,11 +166,15 @@ export const WebcamPanel = () => {
         const response = await sendEmotionFrame(imageBase64, {
           source: 'webcam_panel',
           camera_status: cameraStatus,
-          webgazer_source: gazeRef.current.source,
+          gaze_source: gazeRef.current.source,
         });
+        setGaze(gazeFromEmotion(response));
+        setWebcamEmotion(response);
         setAnalysisSource(response.source);
       } catch {
         setAnalysisSource('unavailable');
+        setGaze((current) => ({ ...current, confidence: 0, source: 'unavailable' }));
+        setWebcamEmotion(null);
       } finally {
         busy = false;
       }
@@ -192,7 +192,8 @@ export const WebcamPanel = () => {
     const interval = window.setInterval(() => {
       const currentGaze = gazeRef.current;
       const currentData = dataRef.current;
-      const gazeDeviation = Math.min(1, Math.hypot(currentGaze.x, currentGaze.y) / 56);
+      const gazeDeviation = Math.min(1, Math.hypot(currentGaze.x, currentGaze.y) / Math.SQRT2);
+      const hasBackendGaze = currentGaze.source !== 'pending' && currentGaze.source !== 'unavailable';
       void sendBehaviorTelemetry({
         typing_speed: Math.max(0, currentData.focusLevel * 1.55),
         mouse_movement: gazeDeviation * 900,
@@ -203,12 +204,13 @@ export const WebcamPanel = () => {
         hesitation_ms: currentData.hesitationLevel * 18,
         window_focus_changes: document.hasFocus() ? 0 : 1,
         correction_rate: Math.max(0, currentData.cognitiveLoad - currentData.focusLevel) / 5,
-        gaze_x: currentGaze.x,
-        gaze_y: currentGaze.y,
+        gaze_x: hasBackendGaze ? currentGaze.x : null,
+        gaze_y: hasBackendGaze ? currentGaze.y : null,
         gaze_deviation: gazeDeviation,
         eye_tracking_confidence: currentGaze.confidence,
         metadata: {
-          source: 'webgazer',
+          source: 'backend_face_mesh',
+          gaze_source: currentGaze.source,
           camera_status: cameraStatus,
           connection_status: connectionStatus,
         },
@@ -239,8 +241,13 @@ export const WebcamPanel = () => {
     return 'border-white/10';
   };
 
-  const microExpression = lastEmotion?.emotion || (data.emotionalStability > 80 ? 'stable' : 'volatile');
-  const gazeDeviation = Math.min(100, Math.round((Math.hypot(gaze.x, gaze.y) / 56) * 100));
+  const isCalibrating = cameraStatus === 'active' && calibrationProgress < 100;
+  const calibrationValue = (value: string) => (isCalibrating ? 'CALIBRATING' : value);
+  const hudEmotion = webcamEmotion ?? lastEmotion;
+  const microExpression = microExpressionLabel(hudEmotion);
+  const gazeDeviation = Math.min(100, Math.round((Math.hypot(gaze.x, gaze.y) / Math.SQRT2) * 100));
+  const stressMarker = data.stressLevel > 60 ? 'Active' : 'Nominal';
+  const gazeVector = `X:${gaze.x.toFixed(2)} Y:${gaze.y.toFixed(2)}`;
 
   return (
     <motion.div 
@@ -259,7 +266,7 @@ export const WebcamPanel = () => {
         <div className={cn("w-2 h-2 rounded-full animate-pulse", 
           cameraStatus === 'active' ? 'bg-[#00f0ff]' : 'bg-[#ff3264]'
         )} />
-        <span className="text-xs font-mono uppercase text-white/50">{cameraStatus === 'active' ? 'REC' : 'SYNC'}</span>
+        <span className="text-xs font-mono uppercase text-white/50">{cameraStatus === 'active' ? (isCalibrating ? 'CAL' : 'REC') : 'SYNC'}</span>
       </div>
 
       <div className="relative w-full aspect-[4/3] md:aspect-video bg-black/60 rounded-[22px] overflow-hidden">
@@ -318,7 +325,7 @@ export const WebcamPanel = () => {
                 
                 <motion.div 
                   className={cn("absolute w-2 h-2 rounded-full", getBgColor())}
-                  animate={{ x: gaze.x, y: gaze.y }}
+                  animate={{ x: gaze.x * GAZE_DISPLAY_RANGE, y: gaze.y * GAZE_DISPLAY_RANGE }}
                   transition={{ type: 'spring', stiffness: 50, damping: 10 }}
                 >
                   <motion.div 
@@ -333,20 +340,39 @@ export const WebcamPanel = () => {
             <Crosshair className={cn("absolute w-6 h-6 opacity-40", getStatusColor())} />
         </div>
 
+        {isCalibrating && (
+          <div className="absolute left-6 right-6 bottom-20 z-20 pointer-events-none">
+            <div className="mx-auto max-w-sm border border-white/10 bg-black/55 backdrop-blur-md px-3 py-2 rounded">
+              <div className="flex items-center justify-between gap-3">
+                <span className={cn("text-[10px] font-mono uppercase tracking-widest", getStatusColor())}>Calibrating</span>
+                <span className="text-[10px] font-mono text-white/60">{Math.round(calibrationProgress)}%</span>
+              </div>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">
+                <motion.div
+                  className={cn("h-full rounded-full", getBgColor())}
+                  initial={false}
+                  animate={{ width: `${calibrationProgress}%` }}
+                  transition={{ duration: 0.2, ease: 'linear' }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="absolute bottom-4 left-4 flex flex-col gap-1 z-10">
-           <HUDMetric label="Eye Confidence" value={`${Math.round(gaze.confidence * 100)}%`} />
-           <HUDMetric label="Micro-expressions" value={microExpression} />
-           <HUDMetric label="Gaze Deviation" value={`${gazeDeviation}%`} />
-           <HUDMetric label="Gaze Vector" value={`X:${gaze.x.toFixed(0)} Y:${gaze.y.toFixed(0)}`} icon={<ArrowUpRight className="w-3 h-3" />} />
+           <HUDMetric label="Eye Confidence" value={calibrationValue(`${Math.round(gaze.confidence * 100)}%`)} />
+           <HUDMetric label="Micro-expressions" value={calibrationValue(microExpression)} />
+           <HUDMetric label="Gaze Deviation" value={calibrationValue(`${gazeDeviation}%`)} />
+           <HUDMetric label="Gaze Vector" value={calibrationValue(gazeVector)} icon={<ArrowUpRight className="w-3 h-3" />} />
         </div>
 
         <div className="absolute bottom-4 right-4 flex flex-col gap-1 items-end text-right z-10">
            <HUDMetric label="Session" value={connectionStatus === 'connected' ? 'Verified' : 'Pending'} icon={<Fingerprint className="w-3 h-3" />} />
-           <HUDMetric label="Cognitive Load" value={`${data.cognitiveLoad.toFixed(1)}%`} />
-           <HUDMetric label="Stress Markers" value={data.stressLevel > 60 ? 'Active' : 'Nominal'} 
-              color={data.stressLevel > 60 ? 'text-[#ff3264]' : 'text-[#00f0ff]'}
+           <HUDMetric label="Cognitive Load" value={calibrationValue(`${data.cognitiveLoad.toFixed(1)}%`)} />
+           <HUDMetric label="Stress Markers" value={calibrationValue(stressMarker)}
+              color={isCalibrating ? 'text-white' : data.stressLevel > 60 ? 'text-[#ff3264]' : 'text-[#00f0ff]'}
            />
-           <HUDMetric label="Analysis" value={analysisSource} />
+           <HUDMetric label="Analysis" value={isCalibrating ? 'CALIBRATING' : analysisSource} />
         </div>
 
         <motion.div 

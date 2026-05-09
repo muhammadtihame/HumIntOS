@@ -58,6 +58,13 @@ export interface EmotionAnalysisResponse {
   face_detected: boolean;
   landmarks_detected: boolean;
   source: string;
+  eye_openness?: number | null;
+  mouth_open?: number | null;
+  brow_lift?: number | null;
+  mouth_curve?: number | null;
+  gaze_x?: number | null;
+  gaze_y?: number | null;
+  face_confidence?: number | null;
   timestamp: string;
 }
 

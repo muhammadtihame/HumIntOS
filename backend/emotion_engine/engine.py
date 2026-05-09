@@ -81,7 +81,7 @@ class EmotionAnalysisEngine:
         frame_h, frame_w = image.shape[:2]
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         face_box = None
-        face_confidence = 0.55
+        face_confidence: Optional[float] = None
         landmarks_detected = False
 
         if self._mp_face_detection is not None:
@@ -97,15 +97,24 @@ class EmotionAnalysisEngine:
                         max(1, int(bbox.height * frame_h)),
                     )
                     face_confidence = float(detection.score[0])
-                    landmarks_detected = True
             except Exception:
                 face_box = None
 
         if face_box is None:
             face_box = self._detect_face_with_cv2(image)
+            if face_box is not None:
+                face_confidence = 0.55
         mesh_result = self._analyze_face_mesh(rgb, frame_w, frame_h)
         if mesh_result is not None:
             landmarks_detected = True
+            if face_box is None:
+                face_box = (
+                    int(mesh_result["face_box_x"]),
+                    int(mesh_result["face_box_y"]),
+                    int(mesh_result["face_box_w"]),
+                    int(mesh_result["face_box_h"]),
+                )
+                face_confidence = 0.72
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         brightness = float(np.mean(gray)) / 255.0
@@ -119,8 +128,12 @@ class EmotionAnalysisEngine:
             center_distance = abs(center_x - 0.5) + abs(center_y - 0.45)
             area_ratio = (w * h) / max(1, frame_w * frame_h)
             attention_score = clamp(1.0 - center_distance * 1.2 + min(area_ratio * 2.2, 0.22), 0.0, 1.0)
+            gaze_x = clamp((center_x - 0.5) * 2.0, -1.0, 1.0)
+            gaze_y = clamp((center_y - 0.5) * 2.0, -1.0, 1.0)
         else:
             attention_score = clamp(0.32 + random.random() * 0.18, 0.0, 1.0)
+            gaze_x = None
+            gaze_y = None
 
         emotion, emotion_confidence = self._detect_emotion_with_fer(image)
         if emotion == "unknown" and mesh_result is not None:
@@ -131,7 +144,7 @@ class EmotionAnalysisEngine:
             )
             stress_probability = expression_stress
             emotion = expression_emotion
-            emotion_confidence = clamp(expression_confidence + face_confidence * 0.18, 0.0, 1.0)
+            emotion_confidence = clamp(expression_confidence + (face_confidence or 0.0) * 0.18, 0.0, 1.0)
         elif emotion == "unknown":
             stress_probability = clamp(
                 (current_state.stress_level / 100.0) * 0.55
@@ -142,7 +155,7 @@ class EmotionAnalysisEngine:
                 1.0,
             )
             emotion = self._emotion_from_state(attention_score, fatigue_level, stress_probability)
-            emotion_confidence = clamp(face_confidence * 0.7 + 0.18, 0.0, 1.0)
+            emotion_confidence = clamp((face_confidence or 0.0) * 0.7 + 0.18, 0.0, 1.0)
         else:
             stress_probability = self._stress_from_emotion(emotion, fatigue_level, current_state)
 
@@ -155,6 +168,13 @@ class EmotionAnalysisEngine:
             face_detected=face_box is not None,
             landmarks_detected=landmarks_detected,
             source="webcam",
+            eye_openness=round(mesh_result["eye_open"], 3) if mesh_result else None,
+            mouth_open=round(mesh_result["mouth_open"], 3) if mesh_result else None,
+            brow_lift=round(mesh_result["brow_lift"], 3) if mesh_result else None,
+            mouth_curve=round(mesh_result["mouth_curve"], 3) if mesh_result else None,
+            gaze_x=round(gaze_x, 3) if gaze_x is not None else None,
+            gaze_y=round(gaze_y, 3) if gaze_y is not None else None,
+            face_confidence=round(face_confidence, 3) if face_confidence is not None else None,
         )
 
     def _decode_image(self, image_base64: str) -> Optional[Any]:
@@ -218,11 +238,21 @@ class EmotionAnalysisEngine:
             eye_open = clamp((left_eye_open + right_eye_open) / 0.62, 0.0, 1.0)
             brow_lift = clamp(((point(159)[1] - point(105)[1]) + (point(386)[1] - point(334)[1])) / max(1.0, frame_h) * 8.0, 0.0, 1.0)
             mouth_curve = clamp(((point(61)[1] + point(291)[1]) / 2.0 - point(13)[1]) / mouth_width + 0.5, 0.0, 1.0)
+            xs = [landmark.x * frame_w for landmark in landmarks]
+            ys = [landmark.y * frame_h for landmark in landmarks]
+            min_x = clamp(min(xs), 0.0, float(frame_w))
+            max_x = clamp(max(xs), 0.0, float(frame_w))
+            min_y = clamp(min(ys), 0.0, float(frame_h))
+            max_y = clamp(max(ys), 0.0, float(frame_h))
             return {
                 "mouth_open": mouth_open,
                 "eye_open": eye_open,
                 "brow_lift": brow_lift,
                 "mouth_curve": mouth_curve,
+                "face_box_x": min_x,
+                "face_box_y": min_y,
+                "face_box_w": max(1.0, max_x - min_x),
+                "face_box_h": max(1.0, max_y - min_y),
             }
         except Exception:
             return None

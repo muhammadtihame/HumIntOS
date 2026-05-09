@@ -59,6 +59,13 @@ class EmotionAnalysisResponse(BaseModel):
     face_detected: bool = False
     landmarks_detected: bool = False
     source: str = "simulated"
+    eye_openness: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouth_open: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    brow_lift: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    mouth_curve: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    gaze_x: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    gaze_y: Optional[float] = Field(default=None, ge=-1.0, le=1.0)
+    face_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     timestamp: str = Field(default_factory=utc_now_iso)
 
 
@@ -134,8 +141,8 @@ class BehaviorTelemetry(BaseModel):
     hesitation_ms: float = Field(default=0.0, ge=0.0)
     window_focus_changes: int = Field(default=0, ge=0)
     correction_rate: float = Field(default=0.0, ge=0.0, description="Backspaces/edits per minute")
-    gaze_x: Optional[float] = Field(default=None, description="WebGazer horizontal offset from viewport center")
-    gaze_y: Optional[float] = Field(default=None, description="WebGazer vertical offset from viewport center")
+    gaze_x: Optional[float] = Field(default=None, description="Backend face-mesh horizontal offset from frame center")
+    gaze_y: Optional[float] = Field(default=None, description="Backend face-mesh vertical offset from frame center")
     gaze_deviation: float = Field(default=0.0, ge=0.0, le=1.0, description="Normalized gaze drift from the task area")
     eye_tracking_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     metadata: Dict[str, Any] = Field(default_factory=dict)

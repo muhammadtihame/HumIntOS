@@ -70,6 +70,7 @@ class SystemOrchestrator:
         self._task.cancel()
         with suppress(asyncio.CancelledError):
             await self._task
+        self.emotion.close()
 
     async def current_state(self) -> CognitiveState:
         return await self.cognition.get_state()
@@ -264,11 +265,15 @@ class SystemOrchestrator:
                 )
                 for task in pending:
                     task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
                 for task in done:
                     with suppress(asyncio.CancelledError):
                         await task
         except Exception as exc:
-            await self._send_ws_envelope(websocket, "hume.evi.error", {"message": str(exc)[:240]})
+            with suppress(Exception):
+                await self._send_ws_envelope(websocket, "hume.evi.error", {"message": self._safe_hume_error(exc)})
+        finally:
+            await self._close_ws(websocket)
 
     async def hume_tts_session(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -301,11 +306,15 @@ class SystemOrchestrator:
                 )
                 for task in pending:
                     task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
                 for task in done:
                     with suppress(asyncio.CancelledError):
                         await task
         except Exception as exc:
-            await self._send_ws_envelope(websocket, "hume.tts.error", {"message": str(exc)[:240]})
+            with suppress(Exception):
+                await self._send_ws_envelope(websocket, "hume.tts.error", {"message": self._safe_hume_error(exc)})
+        finally:
+            await self._close_ws(websocket)
 
     async def _loop(self) -> None:
         while True:
@@ -508,6 +517,16 @@ class SystemOrchestrator:
     async def _send_ws_envelope(self, websocket: WebSocket, event_type: str, payload: Dict[str, Any]) -> None:
         envelope = RealtimeEnvelope(type=event_type, payload=payload)
         await websocket.send_json(model_to_dict(envelope))
+
+    async def _close_ws(self, websocket: WebSocket, code: int = 1000) -> None:
+        with suppress(Exception):
+            await websocket.close(code=code)
+
+    def _safe_hume_error(self, exc: Exception) -> str:
+        message = str(exc)
+        if settings.hume_api_key:
+            message = message.replace(settings.hume_api_key, "[redacted]")
+        return message[:240] or "Hume websocket session ended unexpectedly"
 
     def _parse_json(self, raw: Any) -> Optional[Dict[str, Any]]:
         if isinstance(raw, bytes):

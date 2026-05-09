@@ -45,7 +45,7 @@ class CognitiveState(BaseModel):
 
 
 class EmotionAnalyzeRequest(BaseModel):
-    image_base64: Optional[str] = None
+    image_base64: Optional[str] = Field(default=None, max_length=3_000_000)
     simulate: bool = True
     metadata: Dict[str, Any] = Field(default_factory=dict)
 

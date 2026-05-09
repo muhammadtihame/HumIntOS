@@ -125,7 +125,7 @@ export const postBehaviorTelemetry = (payload: BehaviorTelemetryPayload) =>
 export const postEmotionFrame = (imageBase64: string, metadata: Record<string, unknown> = {}) =>
   apiFetch<EmotionAnalysisResponse>('/emotion/analyze', {
     method: 'POST',
-    body: JSON.stringify({ image_base64: imageBase64, simulate: true, metadata }),
+    body: JSON.stringify({ image_base64: imageBase64, simulate: false, metadata }),
   });
 
 export const postTextEmotion = (text: string, updateState = true, metadata: Record<string, unknown> = {}) =>

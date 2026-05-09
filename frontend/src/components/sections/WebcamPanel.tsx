@@ -158,12 +158,15 @@ export const WebcamPanel = () => {
       try {
         const video = videoRef.current;
         const canvas = canvasRef.current;
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 360;
+        const sourceWidth = video.videoWidth || 640;
+        const sourceHeight = video.videoHeight || 360;
+        const scale = Math.min(1, 640 / Math.max(1, sourceWidth));
+        canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+        canvas.height = Math.max(1, Math.round(sourceHeight * scale));
         const context = canvas.getContext('2d');
         if (!context) return;
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const imageBase64 = canvas.toDataURL('image/jpeg', 0.72);
+        const imageBase64 = canvas.toDataURL('image/jpeg', 0.68);
         const response = await sendEmotionFrame(imageBase64, {
           source: 'webcam_panel',
           camera_status: cameraStatus,
@@ -178,7 +181,7 @@ export const WebcamPanel = () => {
     };
 
     const firstFrame = window.setTimeout(() => void analyzeFrame(), 1200);
-    const interval = window.setInterval(() => void analyzeFrame(), 4500);
+    const interval = window.setInterval(() => void analyzeFrame(), 2000);
     return () => {
       window.clearTimeout(firstFrame);
       window.clearInterval(interval);

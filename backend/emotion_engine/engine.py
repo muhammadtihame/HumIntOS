@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import random
 from typing import Any, Dict, Optional, Tuple
 
@@ -9,11 +10,15 @@ from backend.utils.math import clamp, weighted_choice
 
 
 class EmotionAnalysisEngine:
+    _MAX_IMAGE_BYTES = 2_250_000
+
     def __init__(self) -> None:
         self._cv2 = self._safe_import("cv2")
         self._np = self._safe_import("numpy")
         self._mediapipe = self._safe_import("mediapipe")
         self._fer_detector = None
+        self._haar_cascade = None
+        self._mp_face_mesh = None
         try:
             from fer import FER  # type: ignore
 
@@ -30,6 +35,24 @@ class EmotionAnalysisEngine:
                 )
             except Exception:
                 self._mp_face_detection = None
+            try:
+                self._mp_face_mesh = self._mediapipe.solutions.face_mesh.FaceMesh(
+                    static_image_mode=True,
+                    max_num_faces=1,
+                    refine_landmarks=True,
+                    min_detection_confidence=0.45,
+                )
+            except Exception:
+                self._mp_face_mesh = None
+
+        if self._cv2 is not None:
+            try:
+                cascade_path = self._cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+                cascade = self._cv2.CascadeClassifier(cascade_path)
+                if not cascade.empty():
+                    self._haar_cascade = cascade
+            except Exception:
+                self._haar_cascade = None
 
     def analyze(self, image_base64: Optional[str], current_state: CognitiveState, simulate: bool = True, metadata: Optional[Dict[str, Any]] = None) -> EmotionAnalysisResponse:
         metadata = metadata or {}
@@ -80,6 +103,9 @@ class EmotionAnalysisEngine:
 
         if face_box is None:
             face_box = self._detect_face_with_cv2(image)
+        mesh_result = self._analyze_face_mesh(rgb, frame_w, frame_h)
+        if mesh_result is not None:
+            landmarks_detected = True
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         brightness = float(np.mean(gray)) / 255.0
@@ -97,7 +123,16 @@ class EmotionAnalysisEngine:
             attention_score = clamp(0.32 + random.random() * 0.18, 0.0, 1.0)
 
         emotion, emotion_confidence = self._detect_emotion_with_fer(image)
-        if emotion == "unknown":
+        if emotion == "unknown" and mesh_result is not None:
+            expression_emotion, expression_confidence, expression_stress = self._emotion_from_landmarks(
+                mesh_result,
+                fatigue_level,
+                current_state,
+            )
+            stress_probability = expression_stress
+            emotion = expression_emotion
+            emotion_confidence = clamp(expression_confidence + face_confidence * 0.18, 0.0, 1.0)
+        elif emotion == "unknown":
             stress_probability = clamp(
                 (current_state.stress_level / 100.0) * 0.55
                 + (current_state.cognitive_load / 100.0) * 0.25
@@ -125,17 +160,27 @@ class EmotionAnalysisEngine:
     def _decode_image(self, image_base64: str) -> Optional[Any]:
         try:
             raw = image_base64.split(",", 1)[-1] if "," in image_base64[:80] else image_base64
-            data = base64.b64decode(raw)
+            data = base64.b64decode(raw, validate=True)
+            if len(data) > self._MAX_IMAGE_BYTES:
+                return None
             array = self._np.frombuffer(data, dtype=self._np.uint8)
-            return self._cv2.imdecode(array, self._cv2.IMREAD_COLOR)
-        except Exception:
+            image = self._cv2.imdecode(array, self._cv2.IMREAD_COLOR)
+            if image is None:
+                return None
+            height, width = image.shape[:2]
+            if width * height > 1_500_000:
+                scale = (1_500_000 / float(width * height)) ** 0.5
+                image = self._cv2.resize(image, (max(1, int(width * scale)), max(1, int(height * scale))))
+            return image
+        except (binascii.Error, ValueError, TypeError):
             return None
 
     def _detect_face_with_cv2(self, image: Any) -> Optional[Tuple[int, int, int, int]]:
         cv2 = self._cv2
+        cascade = self._haar_cascade
+        if cascade is None:
+            return None
         try:
-            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            cascade = cv2.CascadeClassifier(cascade_path)
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(48, 48))
             if len(faces) == 0:
@@ -145,6 +190,88 @@ class EmotionAnalysisEngine:
             return int(x), int(y), int(w), int(h)
         except Exception:
             return None
+
+    def _analyze_face_mesh(self, rgb: Any, frame_w: int, frame_h: int) -> Optional[Dict[str, float]]:
+        if self._mp_face_mesh is None:
+            return None
+        try:
+            result = self._mp_face_mesh.process(rgb)
+            if not result.multi_face_landmarks:
+                return None
+            landmarks = result.multi_face_landmarks[0].landmark
+
+            def point(index: int) -> Tuple[float, float]:
+                landmark = landmarks[index]
+                return landmark.x * frame_w, landmark.y * frame_h
+
+            def distance(a: int, b: int) -> float:
+                ax, ay = point(a)
+                bx, by = point(b)
+                return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+
+            mouth_width = max(1.0, distance(61, 291))
+            mouth_open = clamp(distance(13, 14) / mouth_width, 0.0, 1.0)
+            left_eye_width = max(1.0, distance(33, 133))
+            right_eye_width = max(1.0, distance(362, 263))
+            left_eye_open = distance(159, 145) / left_eye_width
+            right_eye_open = distance(386, 374) / right_eye_width
+            eye_open = clamp((left_eye_open + right_eye_open) / 0.62, 0.0, 1.0)
+            brow_lift = clamp(((point(159)[1] - point(105)[1]) + (point(386)[1] - point(334)[1])) / max(1.0, frame_h) * 8.0, 0.0, 1.0)
+            mouth_curve = clamp(((point(61)[1] + point(291)[1]) / 2.0 - point(13)[1]) / mouth_width + 0.5, 0.0, 1.0)
+            return {
+                "mouth_open": mouth_open,
+                "eye_open": eye_open,
+                "brow_lift": brow_lift,
+                "mouth_curve": mouth_curve,
+            }
+        except Exception:
+            return None
+
+    def _emotion_from_landmarks(
+        self,
+        features: Dict[str, float],
+        fatigue_level: float,
+        state: CognitiveState,
+    ) -> Tuple[str, float, float]:
+        mouth_open = features["mouth_open"]
+        eye_open = features["eye_open"]
+        brow_lift = features["brow_lift"]
+        mouth_curve = features["mouth_curve"]
+        stress_probability = clamp(
+            mouth_open * 0.28
+            + brow_lift * 0.24
+            + (1.0 - mouth_curve) * 0.22
+            + fatigue_level * 0.12
+            + state.stress_level / 100.0 * 0.14,
+            0.0,
+            1.0,
+        )
+
+        if fatigue_level > 0.62 and eye_open < 0.42:
+            return "fatigued", 0.62 + fatigue_level * 0.18, stress_probability
+        if mouth_open > 0.38 and brow_lift > 0.42:
+            return "stressed" if stress_probability > 0.52 else "surprise", 0.64 + mouth_open * 0.18, stress_probability
+        if mouth_curve > 0.62 and stress_probability < 0.48:
+            return "calm", 0.58 + mouth_curve * 0.2, stress_probability
+        if stress_probability > 0.62:
+            return "stressed", 0.62 + stress_probability * 0.18, stress_probability
+        if eye_open > 0.45 and mouth_open < 0.26:
+            return "focused", 0.58 + eye_open * 0.18, stress_probability
+        return "neutral", 0.54, stress_probability
+
+    def close(self) -> None:
+        if self._mp_face_detection is not None:
+            try:
+                self._mp_face_detection.close()
+            except Exception:
+                pass
+            self._mp_face_detection = None
+        if self._mp_face_mesh is not None:
+            try:
+                self._mp_face_mesh.close()
+            except Exception:
+                pass
+            self._mp_face_mesh = None
 
     def _detect_emotion_with_fer(self, image: Any) -> Tuple[str, float]:
         if self._fer_detector is None:
@@ -220,4 +347,3 @@ class EmotionAnalysisEngine:
             return __import__(module_name)
         except Exception:
             return None
-

@@ -39,19 +39,36 @@ export const AssistantPanel = () => {
   const humeSocketRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  const stopVoiceCapture = useCallback(() => {
-    recorderRef.current?.stop();
+  const stopMediaResources = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      try {
+        recorder.stop();
+      } catch {
+        // The recorder may already be stopped by the browser when the socket closes.
+      }
+    }
     recorderRef.current = null;
     audioStreamRef.current?.getTracks().forEach((track) => track.stop());
     audioStreamRef.current = null;
-    if (humeSocketRef.current?.readyState === WebSocket.OPEN) {
-      humeSocketRef.current.send(JSON.stringify({ type: 'hume.evi.close', payload: {} }));
-    }
-    humeSocketRef.current?.close();
-    humeSocketRef.current = null;
-    setIsListening(false);
   }, []);
+
+  const stopVoiceCapture = useCallback(() => {
+    const socket = humeSocketRef.current;
+    humeSocketRef.current = null;
+    stopMediaResources();
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'hume.evi.close', payload: {} }));
+    }
+    if (socket && socket.readyState < WebSocket.CLOSING) {
+      socket.close();
+    }
+    currentAudioRef.current?.pause();
+    currentAudioRef.current = null;
+    setIsListening(false);
+  }, [stopMediaResources]);
 
   const submitMessage = useCallback(
     async (messageText: string) => {
@@ -124,7 +141,10 @@ export const AssistantPanel = () => {
           if (envelope.type === 'hume.audio_output') {
             const audio = payload.data || payload.audio;
             if (audio) {
-              void new Audio(`data:audio/wav;base64,${audio}`).play().catch(() => undefined);
+              currentAudioRef.current?.pause();
+              const player = new Audio(`data:audio/wav;base64,${audio}`);
+              currentAudioRef.current = player;
+              void player.play().catch(() => undefined);
             }
           }
           if (envelope.type === 'hume.evi.error') addLog(`ERROR: ${String(payload.message || 'Voice stream failed')}`);
@@ -134,19 +154,34 @@ export const AssistantPanel = () => {
       };
 
       socket.onopen = async () => {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        audioStreamRef.current = stream;
-        const options = MediaRecorder.isTypeSupported('audio/webm') ? { mimeType: 'audio/webm' } : undefined;
-        const recorder = new MediaRecorder(stream, options);
-        recorderRef.current = recorder;
-        recorder.ondataavailable = async (audioEvent) => {
-          if (!audioEvent.data.size || socket.readyState !== WebSocket.OPEN) return;
-          const data = await blobToBase64(audioEvent.data);
-          socket.send(JSON.stringify({ type: 'audio_input', payload: { data } }));
-        };
-        recorder.start(750);
-        setIsListening(true);
-        addLog('Voice stream connected to Hume EVI proxy.');
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          if (humeSocketRef.current !== socket || socket.readyState !== WebSocket.OPEN) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          audioStreamRef.current = stream;
+          const options = MediaRecorder.isTypeSupported('audio/webm') ? { mimeType: 'audio/webm' } : undefined;
+          const recorder = new MediaRecorder(stream, options);
+          recorderRef.current = recorder;
+          recorder.ondataavailable = async (audioEvent) => {
+            if (!audioEvent.data.size || socket.readyState !== WebSocket.OPEN) return;
+            try {
+              const data = await blobToBase64(audioEvent.data);
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'audio_input', payload: { data } }));
+              }
+            } catch {
+              addLog('ERROR: Unable to encode microphone chunk.');
+            }
+          };
+          recorder.start(750);
+          setIsListening(true);
+          addLog('Voice stream connected to Hume EVI proxy.');
+        } catch {
+          addLog('ERROR: Microphone permission or voice stream setup failed.');
+          stopVoiceCapture();
+        }
       };
 
       socket.onerror = () => {
@@ -155,13 +190,15 @@ export const AssistantPanel = () => {
       };
 
       socket.onclose = () => {
+        if (humeSocketRef.current === socket) humeSocketRef.current = null;
+        stopMediaResources();
         setIsListening(false);
       };
     } catch {
       addLog('ERROR: Microphone permission or voice stream setup failed.');
       stopVoiceCapture();
     }
-  }, [addLog, isListening, stopVoiceCapture, submitMessage, systemState]);
+  }, [addLog, isListening, stopMediaResources, stopVoiceCapture, submitMessage, systemState]);
 
   useEffect(() => stopVoiceCapture, [stopVoiceCapture]);
 

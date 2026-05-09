@@ -3,7 +3,7 @@ import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from
 import { cn } from '../lib/utils';
 import { Power, Brain, Eye, Zap, ShieldCheck } from 'lucide-react';
 
-export const LandingPage = ({ onStart }: { onStart: () => void }) => {
+export const LandingPage: React.FC<{ onStart: () => void }> = ({ onStart }) => {
   const [isStarting, setIsStarting] = useState(false);
   const mouseX = useMotionValue(0);
   const mouseY = useMotionValue(0);

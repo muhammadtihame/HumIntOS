@@ -1,29 +1,21 @@
-import React, { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useMemo } from 'react';
+import { motion } from 'motion/react';
 import { Network, FileSearch, ArrowRightCircle } from 'lucide-react';
 import { useCognitive } from '../../context/CognitiveContext';
 import { cn } from '../../lib/utils';
 
 export const DecisionEngine = () => {
-  const { systemState, data } = useCognitive();
-  const [nodes, setNodes] = useState<{id: number, active: boolean}[]>([
-    { id: 1, active: false },
-    { id: 2, active: false },
-    { id: 3, active: false },
-    { id: 4, active: false },
-  ]);
+  const { systemState, data, lastDecision, latencyMs } = useCognitive();
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setNodes(prev => prev.map(node => ({
-        ...node,
-        active: Math.random() > 0.5
-      })));
-    }, 1500);
-    return () => clearInterval(interval);
-  }, []);
+  const nodes = useMemo(() => ([
+    { id: 1, active: data.stressLevel >= 60 || systemState === 'STRESS' || systemState === 'OVERLOAD' },
+    { id: 2, active: data.focusLevel >= 75 || systemState === 'FOCUS' },
+    { id: 3, active: data.cognitiveLoad >= 68 || systemState === 'OVERLOAD' },
+    { id: 4, active: data.distractionProbability >= 45 || data.hesitationLevel >= 55 },
+  ]), [data, systemState]);
 
   const getEngineStatus = () => {
+    if (lastDecision?.reason) return lastDecision.reason;
     switch (systemState) {
       case 'STRESS': return 'Modulating Response Syntax';
       case 'OVERLOAD': return 'Activating Focus Protocol';
@@ -108,7 +100,7 @@ export const DecisionEngine = () => {
 
       <div className="absolute bottom-4 right-6 flex items-center gap-2">
         <ArrowRightCircle className="w-4 h-4 text-white/40" />
-        <span className="text-[10px] font-mono text-white/40">Lat: 12ms</span>
+        <span className="text-[10px] font-mono text-white/40">Lat: {latencyMs === null ? '--' : `${latencyMs}ms`}</span>
       </div>
     </motion.div>
   );

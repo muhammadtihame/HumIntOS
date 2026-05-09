@@ -1,14 +1,20 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { Target, AlertTriangle, Monitor, RotateCcw } from 'lucide-react';
 import { useCognitive, SystemState } from '../../context/CognitiveContext';
 import { cn } from '../../lib/utils';
 
 export const DemoControls = () => {
-  const { systemState, setSystemState } = useCognitive();
+  const { systemState, triggerDemo, connectionStatus } = useCognitive();
+  const [pendingState, setPendingState] = useState<SystemState | null>(null);
 
-  const handleStateChange = (newState: SystemState) => {
-    setSystemState(newState);
+  const handleStateChange = async (newState: SystemState) => {
+    setPendingState(newState);
+    try {
+      await triggerDemo(newState);
+    } finally {
+      setPendingState(null);
+    }
   };
 
   return (
@@ -20,10 +26,13 @@ export const DemoControls = () => {
     >
       <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/20 to-transparent" />
       
-      <span className="text-xs font-mono text-white/30 uppercase tracking-widest mr-4">Demo Overrides</span>
+      <span className="text-xs font-mono text-white/30 uppercase tracking-widest mr-4">
+        Demo Overrides · {connectionStatus}
+      </span>
 
       <ControlBtn 
         active={systemState === 'NORMAL'} 
+        disabled={pendingState !== null}
         icon={<Monitor className="w-4 h-4" />}
         label="Normalize State"
         color="hover:border-white/40 hover:bg-white/10"
@@ -32,6 +41,7 @@ export const DemoControls = () => {
       />
       <ControlBtn 
         active={systemState === 'FOCUS'} 
+        disabled={pendingState !== null}
         icon={<Target className="w-4 h-4" />}
         label="Deep Focus"
         color="hover:border-[#00f0ff]/50 hover:bg-[#00f0ff]/10 hover:text-[#00f0ff]"
@@ -40,6 +50,7 @@ export const DemoControls = () => {
       />
       <ControlBtn 
         active={systemState === 'STRESS'} 
+        disabled={pendingState !== null}
         icon={<AlertTriangle className="w-4 h-4" />}
         label="Stress Mode"
         color="hover:border-[#ff9632]/50 hover:bg-[#ff9632]/10 hover:text-[#ff9632]"
@@ -48,6 +59,7 @@ export const DemoControls = () => {
       />
       <ControlBtn 
         active={systemState === 'OVERLOAD'} 
+        disabled={pendingState !== null}
         icon={<RotateCcw className="w-4 h-4" />}
         label="Simulate Overload"
         color="hover:border-[#ff3264]/50 hover:bg-[#ff3264]/10 hover:text-[#ff3264]"
@@ -58,12 +70,13 @@ export const DemoControls = () => {
   );
 };
 
-const ControlBtn = ({ active, icon, label, onClick, color, activeColor }: any) => {
+const ControlBtn = ({ active, disabled, icon, label, onClick, color, activeColor }: any) => {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={cn(
-        "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-300 border border-transparent text-white/60",
+        "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-300 border border-transparent text-white/60 disabled:opacity-40 disabled:cursor-wait",
         active ? activeColor : color
       )}
     >

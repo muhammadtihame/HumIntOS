@@ -5,7 +5,14 @@ import { useCognitive } from '../../context/CognitiveContext';
 import { cn } from '../../lib/utils';
 
 export const HeroSection = () => {
-  const { systemState } = useCognitive();
+  const { systemState, connectionStatus } = useCognitive();
+  const syncLabel = connectionStatus === 'connected'
+    ? 'Realtime Active'
+    : connectionStatus === 'reconnecting'
+      ? 'Reconnecting'
+      : connectionStatus === 'offline' || connectionStatus === 'error'
+        ? 'Backend Offline'
+        : 'Syncing';
 
   return (
     <motion.section 
@@ -92,9 +99,12 @@ export const HeroSection = () => {
           )} />
           <div className="flex flex-col">
             <span className="text-xs uppercase text-white/40 font-mono">System Sync</span>
-            <span className="text-sm font-medium">Realtime Active</span>
+            <span className="text-sm font-medium">{syncLabel}</span>
           </div>
-          <div className="w-2 h-2 rounded-full bg-[#00f0ff] animate-pulse ml-2" />
+          <div className={cn(
+            "w-2 h-2 rounded-full animate-pulse ml-2",
+            connectionStatus === 'connected' ? "bg-[#00f0ff]" : "bg-[#ff3264]"
+          )} />
         </motion.div>
       </div>
     </motion.section>

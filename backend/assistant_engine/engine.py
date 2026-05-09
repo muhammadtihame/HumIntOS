@@ -19,6 +19,10 @@ class AdaptiveAssistantEngine:
             "emotion": state.emotion,
             "fatigue": state.fatigue,
             "active_mode": state.active_mode,
+            "empathy_level": state.empathy_level,
+            "hesitation_level": state.hesitation_level,
+            "engagement_level": state.engagement_level,
+            "voice_confidence": state.voice_confidence,
         }
         system_prompt = self._build_system_prompt(state)
 
@@ -57,6 +61,8 @@ class AdaptiveAssistantEngine:
             "You are HumIntOS, a human-aware cognitive operating system assistant.\n"
             f"Current cognitive state: stress={state.stress_level}, focus={state.focus_level}, "
             f"load={state.cognitive_load}, emotion={state.emotion}, fatigue={state.fatigue}, "
+            f"empathy={state.empathy_level}, hesitation={state.hesitation_level}, "
+            f"engagement={state.engagement_level}, voice_confidence={state.voice_confidence}, "
             f"mode={state.active_mode}, style={state.assistant_style}.\n"
             f"Adaptive behavior: {style_guidance}\n"
             "Do not mention that the state may be simulated. Respond as if you are adapting in realtime."
@@ -122,4 +128,3 @@ class AdaptiveAssistantEngine:
             "I can help. Give me the error, the expected behavior, and the file or component involved. "
             "I’ll map the likely cause and propose the smallest useful fix."
         )
-

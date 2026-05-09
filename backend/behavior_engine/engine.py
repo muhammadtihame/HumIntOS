@@ -12,7 +12,17 @@ class BehaviorAnalyticsEngine:
         hesitation_score = self._score_hesitation(telemetry)
         distraction_score = self._score_distraction(telemetry)
         instability_score = self._score_instability(telemetry)
-        focus_loss_score = int(round(clamp((distraction_score * 0.45) + (hesitation_score * 0.25) + (telemetry.inactivity_seconds * 1.2))))
+        gaze_pressure = clamp(telemetry.gaze_deviation * 100.0)
+        focus_loss_score = int(
+            round(
+                clamp(
+                    (distraction_score * 0.45)
+                    + (hesitation_score * 0.25)
+                    + (telemetry.inactivity_seconds * 1.2)
+                    + (gaze_pressure * 0.16)
+                )
+            )
+        )
 
         scores = {
             "overload_score": overload_score,
@@ -29,6 +39,7 @@ class BehaviorAnalyticsEngine:
             "distraction_probability": distraction_score * 0.1 + telemetry.tab_switches * 0.8,
             "behavioral_consistency": -(instability_score * 0.07 + correction_rate_to_delta(telemetry.correction_rate)),
             "intent_confidence": -(hesitation_score * 0.04 + focus_loss_score * 0.035),
+            "engagement_level": -(gaze_pressure * 0.025),
         }
 
         events: List[SystemEvent] = []
@@ -72,6 +83,21 @@ class BehaviorAnalyticsEngine:
                     signals={"mouse_movement": telemetry.mouse_movement, "click_frequency": telemetry.click_frequency},
                 )
             )
+        if telemetry.gaze_deviation >= 0.72:
+            events.append(
+                SystemEvent(
+                    event="gaze_drift_detected",
+                    severity="medium" if telemetry.gaze_deviation < 0.9 else "high",
+                    recommendation="activate_focus_mode",
+                    confidence=max(0.55, telemetry.eye_tracking_confidence),
+                    signals={
+                        "gaze_x": telemetry.gaze_x,
+                        "gaze_y": telemetry.gaze_y,
+                        "gaze_deviation": telemetry.gaze_deviation,
+                        "eye_tracking_confidence": telemetry.eye_tracking_confidence,
+                    },
+                )
+            )
 
         return scores, deltas, events
 
@@ -93,7 +119,20 @@ class BehaviorAnalyticsEngine:
         focus_changes = clamp(telemetry.window_focus_changes * 14.0)
         inactivity = clamp(telemetry.inactivity_seconds * 2.0)
         low_activity = clamp(42.0 - telemetry.typing_speed) if telemetry.inactivity_seconds > 4 else 0.0
-        return int(round(clamp(tab_switch * 0.38 + focus_changes * 0.32 + inactivity * 0.2 + low_activity * 0.1)))
+        gaze_drift = clamp(telemetry.gaze_deviation * 100.0)
+        tracking_loss = clamp((0.5 - telemetry.eye_tracking_confidence) * 100.0) if telemetry.eye_tracking_confidence > 0 else 0.0
+        return int(
+            round(
+                clamp(
+                    tab_switch * 0.3
+                    + focus_changes * 0.25
+                    + inactivity * 0.16
+                    + low_activity * 0.09
+                    + gaze_drift * 0.16
+                    + tracking_loss * 0.04
+                )
+            )
+        )
 
     def _score_instability(self, telemetry: BehaviorTelemetry) -> int:
         pointer_motion = max(telemetry.mouse_movement, telemetry.mouse_velocity)

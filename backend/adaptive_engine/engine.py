@@ -8,17 +8,17 @@ class AdaptiveModeEngine:
         self._last_mode = "normal_mode"
 
     def evaluate(self, state: CognitiveState) -> AdaptiveDecision:
-        if state.cognitive_load >= 85 or (state.stress_level >= 80 and state.focus_level <= 45):
+        if state.cognitive_load >= 85 or (state.stress_level >= 80 and state.focus_level <= 45) or state.hesitation_level >= 88:
             mode = "cognitive_overload_mode"
             style = "simplified_guided"
             reason = "Cognitive load threshold exceeded"
             priority = 4
-        elif state.stress_level >= 75:
+        elif state.stress_level >= 75 or (state.hesitation_level >= 70 and state.voice_confidence <= 45):
             mode = "stress_mode"
             style = "calming_stepwise"
-            reason = "Stress level threshold exceeded"
+            reason = "Stress or hesitation threshold exceeded"
             priority = 3
-        elif state.focus_level >= 80 and state.stress_level <= 62 and state.distraction_probability <= 45:
+        elif state.focus_level >= 80 and state.stress_level <= 62 and state.distraction_probability <= 45 and state.engagement_level >= 64:
             mode = "focus_mode"
             style = "concise_technical"
             reason = "Sustained focus and low distraction detected"
@@ -42,6 +42,8 @@ class AdaptiveModeEngine:
                 "focus_level": state.focus_level,
                 "cognitive_load": state.cognitive_load,
                 "distraction_probability": state.distraction_probability,
+                "hesitation_level": state.hesitation_level,
+                "engagement_level": state.engagement_level,
+                "voice_confidence": state.voice_confidence,
             },
         )
-

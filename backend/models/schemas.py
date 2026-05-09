@@ -35,6 +35,10 @@ class CognitiveState(BaseModel):
     intent_confidence: int = Field(ge=0, le=100)
     distraction_probability: int = Field(ge=0, le=100)
     behavioral_consistency: int = Field(ge=0, le=100)
+    empathy_level: int = Field(default=50, ge=0, le=100)
+    hesitation_level: int = Field(default=20, ge=0, le=100)
+    engagement_level: int = Field(default=65, ge=0, le=100)
+    voice_confidence: int = Field(default=70, ge=0, le=100)
     active_mode: AdaptiveMode = "normal_mode"
     assistant_style: str = "balanced_collaborative"
     last_updated: str = Field(default_factory=utc_now_iso)
@@ -58,6 +62,68 @@ class EmotionAnalysisResponse(BaseModel):
     timestamp: str = Field(default_factory=utc_now_iso)
 
 
+class HumeEmotionSignals(BaseModel):
+    stress: float = Field(default=0.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    empathy: float = Field(default=0.0, ge=0.0, le=1.0)
+    hesitation: float = Field(default=0.0, ge=0.0, le=1.0)
+    engagement: float = Field(default=0.0, ge=0.0, le=1.0)
+    dominant_emotion: str = "neutral"
+    top_emotions: Dict[str, float] = Field(default_factory=dict)
+    transcript: Optional[str] = None
+    source: str = "hume"
+
+
+class TextEmotionRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=10_000)
+    update_state: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TextEmotionResponse(BaseModel):
+    text: str
+    provider: str
+    signals: HumeEmotionSignals
+    raw: Dict[str, Any] = Field(default_factory=dict)
+    state: Optional[CognitiveState] = None
+    latency_ms: int = 0
+    timestamp: str = Field(default_factory=utc_now_iso)
+
+
+class TTSRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=5_000)
+    voice_name: Optional[str] = None
+    voice_provider: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=1_000)
+    strip_headers: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TTSResponse(BaseModel):
+    provider: str
+    configured: bool
+    voice_name: Optional[str] = None
+    voice_provider: Optional[str] = None
+    mime_type: str = "audio/wav"
+    audio_chunks: List[str] = Field(default_factory=list)
+    generation_ids: List[str] = Field(default_factory=list)
+    description: str
+    fallback_text: Optional[str] = None
+    error: Optional[str] = None
+    latency_ms: int = 0
+    timestamp: str = Field(default_factory=utc_now_iso)
+
+
+class HumeStatusResponse(BaseModel):
+    configured: bool
+    api_key_present: bool
+    evi_configured: bool
+    evi_config_id_present: bool
+    tts_voice_name: Optional[str] = None
+    expression_api_note: str
+    endpoints: Dict[str, str]
+
+
 class BehaviorTelemetry(BaseModel):
     typing_speed: float = Field(default=0.0, ge=0.0, description="Characters per minute")
     mouse_movement: float = Field(default=0.0, ge=0.0, description="Pixels moved in the sampling window")
@@ -68,6 +134,10 @@ class BehaviorTelemetry(BaseModel):
     hesitation_ms: float = Field(default=0.0, ge=0.0)
     window_focus_changes: int = Field(default=0, ge=0)
     correction_rate: float = Field(default=0.0, ge=0.0, description="Backspaces/edits per minute")
+    gaze_x: Optional[float] = Field(default=None, description="WebGazer horizontal offset from viewport center")
+    gaze_y: Optional[float] = Field(default=None, description="WebGazer vertical offset from viewport center")
+    gaze_deviation: float = Field(default=0.0, ge=0.0, le=1.0, description="Normalized gaze drift from the task area")
+    eye_tracking_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

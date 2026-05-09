@@ -17,6 +17,10 @@ class DemoModeEngine:
                     "intent_confidence": 46,
                     "distraction_probability": 78,
                     "behavioral_consistency": 34,
+                    "empathy_level": 43,
+                    "hesitation_level": 88,
+                    "engagement_level": 31,
+                    "voice_confidence": 34,
                 },
                 "overloaded",
                 [
@@ -48,6 +52,10 @@ class DemoModeEngine:
                     "intent_confidence": 92,
                     "distraction_probability": 12,
                     "behavioral_consistency": 88,
+                    "empathy_level": 58,
+                    "hesitation_level": 9,
+                    "engagement_level": 93,
+                    "voice_confidence": 91,
                 },
                 "focused",
                 [
@@ -64,6 +72,40 @@ class DemoModeEngine:
                     ReasoningLog(message="Assistant response style compressed for technical flow", category="assistant", intensity="low"),
                 ],
             ),
+            "stress": (
+                {
+                    "stress_level": 78,
+                    "focus_level": 52,
+                    "cognitive_load": 68,
+                    "fatigue": 48,
+                    "intent_confidence": 58,
+                    "distraction_probability": 50,
+                    "behavioral_consistency": 52,
+                    "empathy_level": 62,
+                    "hesitation_level": 74,
+                    "engagement_level": 49,
+                    "voice_confidence": 44,
+                },
+                "stressed",
+                [
+                    SystemEvent(
+                        event="demo_stress_mode_injected",
+                        severity="high",
+                        recommendation="activate_stress_mode",
+                        confidence=0.97,
+                    ),
+                    SystemEvent(
+                        event="guided_response_required",
+                        severity="medium",
+                        recommendation="offer_stepwise_guidance",
+                        confidence=0.9,
+                    ),
+                ],
+                [
+                    ReasoningLog(message="Elevated stress marker injected", category="demo", intensity="high"),
+                    ReasoningLog(message="Assistant response style moved to calming stepwise mode", category="assistant", intensity="medium"),
+                ],
+            ),
             "normalize": (
                 {
                     "stress_level": 38,
@@ -73,6 +115,10 @@ class DemoModeEngine:
                     "intent_confidence": 80,
                     "distraction_probability": 24,
                     "behavioral_consistency": 74,
+                    "empathy_level": 52,
+                    "hesitation_level": 18,
+                    "engagement_level": 66,
+                    "voice_confidence": 72,
                 },
                 "calm",
                 [
@@ -90,4 +136,3 @@ class DemoModeEngine:
             ),
         }
         return scenarios[name]
-

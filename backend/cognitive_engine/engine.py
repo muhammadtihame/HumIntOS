@@ -5,7 +5,7 @@ import random
 import time
 from typing import Dict, Iterable, List, Mapping, Optional
 
-from backend.models.schemas import CognitiveState, ReasoningLog, SystemEvent, utc_now_iso
+from backend.models.schemas import CognitiveState, HumeEmotionSignals, ReasoningLog, SystemEvent, utc_now_iso
 from backend.utils.math import clamp, jitter, lerp, weighted_choice
 
 
@@ -17,6 +17,10 @@ COGNITIVE_KEYS = (
     "intent_confidence",
     "distraction_probability",
     "behavioral_consistency",
+    "empathy_level",
+    "hesitation_level",
+    "engagement_level",
+    "voice_confidence",
 )
 
 
@@ -37,6 +41,10 @@ class CognitiveStateEngine:
             "intent_confidence": 78.0,
             "distraction_probability": 26.0,
             "behavioral_consistency": 72.0,
+            "empathy_level": 50.0,
+            "hesitation_level": 20.0,
+            "engagement_level": 65.0,
+            "voice_confidence": 70.0,
         }
         self._targets: Dict[str, float] = dict(self._values)
         self._anchors: Dict[str, float] = {
@@ -47,6 +55,10 @@ class CognitiveStateEngine:
             "intent_confidence": 80.0,
             "distraction_probability": 24.0,
             "behavioral_consistency": 74.0,
+            "empathy_level": 52.0,
+            "hesitation_level": 18.0,
+            "engagement_level": 66.0,
+            "voice_confidence": 72.0,
         }
         self._emotion = "focused"
         self._active_mode = "normal_mode"
@@ -76,6 +88,9 @@ class CognitiveStateEngine:
             self._targets["distraction_probability"] += (60.0 - self._targets["focus_level"]) * 0.018
             self._targets["intent_confidence"] += (self._targets["focus_level"] - 55.0) * 0.012
             self._targets["behavioral_consistency"] += (55.0 - self._targets["distraction_probability"]) * 0.01
+            self._targets["focus_level"] += (self._targets["engagement_level"] - 60.0) * 0.012
+            self._targets["cognitive_load"] += self._targets["hesitation_level"] * 0.004
+            self._targets["intent_confidence"] += (self._targets["voice_confidence"] - 60.0) * 0.008
             self._targets["fatigue"] += 0.04 * dt
 
             for key in COGNITIVE_KEYS:
@@ -116,6 +131,44 @@ class CognitiveStateEngine:
 
             self._normalize_targets_unlocked()
             self._emotion = emotion
+            return self._snapshot_unlocked()
+
+    async def apply_hume_signals(self, signals: HumeEmotionSignals) -> CognitiveState:
+        async with self._lock:
+            stress = clamp(signals.stress * 100.0)
+            confidence = clamp(signals.confidence * 100.0)
+            empathy = clamp(signals.empathy * 100.0)
+            hesitation = clamp(signals.hesitation * 100.0)
+            engagement = clamp(signals.engagement * 100.0)
+
+            inferred_focus = clamp(engagement * 0.66 + confidence * 0.26 + (100.0 - hesitation) * 0.08 - stress * 0.14)
+            inferred_load = clamp(stress * 0.48 + hesitation * 0.28 + (100.0 - confidence) * 0.16 + self._targets["cognitive_load"] * 0.08)
+
+            self._targets["stress_level"] = lerp(self._targets["stress_level"], stress, 0.5)
+            self._targets["focus_level"] = lerp(self._targets["focus_level"], inferred_focus, 0.42)
+            self._targets["cognitive_load"] = lerp(self._targets["cognitive_load"], inferred_load, 0.44)
+            self._targets["intent_confidence"] = lerp(self._targets["intent_confidence"], confidence, 0.5)
+            self._targets["distraction_probability"] = lerp(
+                self._targets["distraction_probability"],
+                clamp(hesitation * 0.52 + (100.0 - engagement) * 0.48),
+                0.38,
+            )
+            self._targets["behavioral_consistency"] = lerp(
+                self._targets["behavioral_consistency"],
+                clamp(confidence * 0.54 + engagement * 0.32 + (100.0 - hesitation) * 0.14),
+                0.36,
+            )
+            self._targets["empathy_level"] = lerp(self._targets["empathy_level"], empathy, 0.52)
+            self._targets["hesitation_level"] = lerp(self._targets["hesitation_level"], hesitation, 0.58)
+            self._targets["engagement_level"] = lerp(self._targets["engagement_level"], engagement, 0.52)
+            self._targets["voice_confidence"] = lerp(self._targets["voice_confidence"], confidence, 0.5)
+
+            if signals.dominant_emotion and signals.dominant_emotion != "neutral":
+                self._emotion = signals.dominant_emotion.lower().replace(" ", "_")
+            self._normalize_targets_unlocked()
+
+            for key in COGNITIVE_KEYS:
+                self._values[key] = lerp(self._values[key], self._targets[key], 0.45)
             return self._snapshot_unlocked()
 
     async def apply_behavior_deltas(self, deltas: Mapping[str, float]) -> CognitiveState:
@@ -178,6 +231,26 @@ class CognitiveStateEngine:
                     signals={"distraction_probability": state.distraction_probability},
                 )
             )
+        if state.hesitation_level >= 72:
+            events.append(
+                SystemEvent(
+                    event="emotional_hesitation_detected",
+                    severity="medium" if state.hesitation_level < 86 else "high",
+                    recommendation="offer_guided_next_step",
+                    confidence=0.84,
+                    signals={"hesitation_level": state.hesitation_level},
+                )
+            )
+        if state.engagement_level <= 34:
+            events.append(
+                SystemEvent(
+                    event="engagement_drop_detected",
+                    severity="medium",
+                    recommendation="shorten_response_and_reconfirm_intent",
+                    confidence=0.79,
+                    signals={"engagement_level": state.engagement_level},
+                )
+            )
         return events
 
     def build_reasoning_logs(self, state: CognitiveState) -> List[ReasoningLog]:
@@ -214,6 +287,22 @@ class CognitiveStateEngine:
                     intensity="medium",
                 )
             )
+        if state.hesitation_level > 62:
+            logs.append(
+                ReasoningLog(
+                    message="Voice/text hesitation signal elevated; preparing guided next-step assistance",
+                    category="hume",
+                    intensity="medium",
+                )
+            )
+        if state.engagement_level > 78:
+            logs.append(
+                ReasoningLog(
+                    message="Engagement signal strong; preserving momentum with low-latency response pacing",
+                    category="hume",
+                    intensity="low",
+                )
+            )
         if not logs:
             logs.append(
                 ReasoningLog(
@@ -238,6 +327,10 @@ class CognitiveStateEngine:
         self._targets["intent_confidence"] += jitter(2.0)
         self._targets["distraction_probability"] += jitter(3.0)
         self._targets["behavioral_consistency"] += jitter(2.0)
+        self._targets["empathy_level"] += jitter(1.4)
+        self._targets["hesitation_level"] += jitter(1.7)
+        self._targets["engagement_level"] += jitter(2.3)
+        self._targets["voice_confidence"] += jitter(1.8)
         self._normalize_targets_unlocked()
 
     def _normalize_targets_unlocked(self) -> None:
@@ -250,13 +343,16 @@ class CognitiveStateEngine:
         load = self._values["cognitive_load"]
         fatigue = self._values["fatigue"]
         distraction = self._values["distraction_probability"]
+        engagement = self._values["engagement_level"]
+        hesitation = self._values["hesitation_level"]
 
         options = [
-            ("focused", max(0.0, focus - stress * 0.35 - fatigue * 0.15)),
+            ("focused", max(0.0, focus + engagement * 0.18 - stress * 0.35 - fatigue * 0.15)),
             ("stressed", max(0.0, stress + load * 0.25 - focus * 0.25)),
             ("overloaded", max(0.0, load + stress * 0.25 - focus * 0.2 - 38.0)),
             ("fatigued", max(0.0, fatigue + load * 0.12 - focus * 0.1 - 22.0)),
             ("distracted", max(0.0, distraction + 45.0 - focus)),
+            ("hesitant", max(0.0, hesitation + stress * 0.18 - engagement * 0.12 - 20.0)),
             ("calm", max(0.0, 88.0 - stress - load * 0.22 + focus * 0.18)),
         ]
         return weighted_choice(options)
@@ -272,8 +368,11 @@ class CognitiveStateEngine:
             intent_confidence=values["intent_confidence"],
             distraction_probability=values["distraction_probability"],
             behavioral_consistency=values["behavioral_consistency"],
+            empathy_level=values["empathy_level"],
+            hesitation_level=values["hesitation_level"],
+            engagement_level=values["engagement_level"],
+            voice_confidence=values["voice_confidence"],
             active_mode=self._active_mode,  # type: ignore[arg-type]
             assistant_style=self._assistant_style,
             last_updated=utc_now_iso(),
         )
-

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
-import { AreaChart, Area, ResponsiveContainer } from 'recharts';
-import { useCognitive, CognitiveData } from '../../context/CognitiveContext';
+import { AreaChart, Area } from 'recharts';
+import { useCognitive } from '../../context/CognitiveContext';
 import { cn } from '../../lib/utils';
 import { Zap, Brain, Crosshair, HeartPulse, Activity, AlertTriangle, BatteryWarning } from 'lucide-react';
 
@@ -92,6 +92,26 @@ export const MetricsPanel = () => {
 };
 
 const MetricCard = ({ title, value, icon, color, history, dataKey }: any) => {
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const [chartSize, setChartSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const node = chartRef.current;
+    if (!node) return;
+
+    const updateSize = () => {
+      setChartSize({
+        width: Math.max(1, node.clientWidth),
+        height: Math.max(1, node.clientHeight),
+      });
+    };
+
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <motion.div 
       className="bg-black/30 rounded-2xl p-4 flex flex-col gap-3 relative overflow-hidden border border-white/5"
@@ -116,9 +136,9 @@ const MetricCard = ({ title, value, icon, color, history, dataKey }: any) => {
         <span className="text-sm text-white/30 mb-1">%</span>
       </div>
 
-      <div className="absolute bottom-0 left-0 w-full h-12 opacity-30 pointer-events-none">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={history}>
+      <div ref={chartRef} className="absolute bottom-0 left-0 w-full h-12 opacity-30 pointer-events-none">
+        {chartSize.width > 0 && chartSize.height > 0 && (
+          <AreaChart width={chartSize.width} height={chartSize.height} data={history}>
             <defs>
               <linearGradient id={`grad-${dataKey}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={color} stopOpacity={0.8} />
@@ -134,7 +154,7 @@ const MetricCard = ({ title, value, icon, color, history, dataKey }: any) => {
               isAnimationActive={false}
             />
           </AreaChart>
-        </ResponsiveContainer>
+        )}
       </div>
     </motion.div>
   );

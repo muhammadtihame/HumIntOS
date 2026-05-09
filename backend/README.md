@@ -5,8 +5,16 @@ HumIntOS is a hackathon-ready realtime backend for a cinematic adaptive AI inter
 ## Quick Start
 
 ```bash
+cd backend
 pip install -r requirements.txt
 uvicorn main:app --reload
+```
+
+From the repository root you can also run:
+
+```bash
+pip install -r backend/requirements.txt
+uvicorn backend.main:app --reload
 ```
 
 Open API docs:
@@ -119,4 +127,3 @@ If `OPENAI_API_KEY` is configured, HumIntOS uses OpenAI. If `OLLAMA_BASE_URL` is
 ```
 
 The engine uses OpenCV and MediaPipe when available, and gracefully falls back to believable simulation so the UI remains alive without sensors.
-

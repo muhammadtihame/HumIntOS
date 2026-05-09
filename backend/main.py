@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,4 +39,3 @@ app.add_middleware(
 
 app.include_router(api_router)
 app.include_router(websocket_router)
-

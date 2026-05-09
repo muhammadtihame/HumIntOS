@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
 
     load_dotenv()
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 except Exception:
     pass
 

@@ -12,6 +12,38 @@ type ChatMessage = {
   state: SystemState;
 };
 
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  [index: number]: { transcript: string };
+};
+
+type SpeechRecognitionEventLike = Event & {
+  resultIndex: number;
+  results: {
+    length: number;
+    [index: number]: SpeechRecognitionResultLike;
+  };
+};
+
+type BrowserSpeechRecognition = EventTarget & {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onend: (() => void) | null;
+};
+
+type SpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+
+type WindowWithSpeechRecognition = Window & {
+  SpeechRecognition?: SpeechRecognitionConstructor;
+  webkitSpeechRecognition?: SpeechRecognitionConstructor;
+};
+
 const blobToBase64 = (blob: Blob) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -26,8 +58,10 @@ export const AssistantPanel = () => {
     data,
     assistantStatus,
     connectionStatus,
+    humeStatus,
     analyzeTextEmotion,
     sendAssistantMessage,
+    synthesizeVoice,
     addLog,
   } = useCognitive();
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -40,6 +74,11 @@ export const AssistantPanel = () => {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+
+  const addAssistantNotice = useCallback((text: string) => {
+    setMessages((prev) => [...prev, { id: Date.now(), type: 'ai', text, state: systemState }]);
+  }, [systemState]);
 
   const stopMediaResources = useCallback(() => {
     const recorder = recorderRef.current;
@@ -65,10 +104,70 @@ export const AssistantPanel = () => {
     if (socket && socket.readyState < WebSocket.CLOSING) {
       socket.close();
     }
+    const recognition = speechRecognitionRef.current;
+    speechRecognitionRef.current = null;
+    if (recognition) {
+      recognition.onend = null;
+      recognition.onerror = null;
+      recognition.onresult = null;
+      try {
+        recognition.stop();
+      } catch {
+        recognition.abort();
+      }
+    }
     currentAudioRef.current?.pause();
     currentAudioRef.current = null;
     setIsListening(false);
   }, [stopMediaResources]);
+
+  const playBrowserSpeech = useCallback((text: string) => {
+    if (!('speechSynthesis' in window)) return false;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = systemState === 'STRESS' || systemState === 'OVERLOAD' ? 0.92 : 1;
+    utterance.pitch = systemState === 'FOCUS' ? 1.05 : 1;
+    window.speechSynthesis.speak(utterance);
+    return true;
+  }, [systemState]);
+
+  const playAssistantAudio = useCallback(
+    async (text: string) => {
+      const cleanText = text.trim();
+      if (!cleanText) return;
+
+      currentAudioRef.current?.pause();
+      currentAudioRef.current = null;
+
+      try {
+        const response = await synthesizeVoice(cleanText, { source: 'assistant_panel' });
+        const chunks = Array.isArray(response.audio_chunks)
+          ? response.audio_chunks.filter((chunk): chunk is string => typeof chunk === 'string' && Boolean(chunk))
+          : [];
+        const mimeType = typeof response.mime_type === 'string' ? response.mime_type : 'audio/wav';
+
+        if (chunks.length) {
+          for (const chunk of chunks) {
+            const player = new Audio(`data:${mimeType};base64,${chunk}`);
+            currentAudioRef.current = player;
+            await player.play();
+            await new Promise<void>((resolve) => {
+              player.onended = () => resolve();
+              player.onerror = () => resolve();
+            });
+          }
+          return;
+        }
+      } catch {
+        addLog('ERROR: Hume voice synthesis failed; using browser speech output.');
+      }
+
+      if (!playBrowserSpeech(cleanText)) {
+        addLog('ERROR: Audio output is unavailable in this browser.');
+      }
+    },
+    [addLog, playBrowserSpeech, synthesizeVoice],
+  );
 
   const submitMessage = useCallback(
     async (messageText: string) => {
@@ -86,6 +185,7 @@ export const AssistantPanel = () => {
           ...prev,
           { id: Date.now() + 1, type: 'ai', text: response.response, state: systemState },
         ]);
+        void playAssistantAudio(response.response);
       } catch {
         setMessages((prev) => [
           ...prev,
@@ -100,7 +200,7 @@ export const AssistantPanel = () => {
         setIsTyping(false);
       }
     },
-    [analyzeTextEmotion, sendAssistantMessage, systemState],
+    [analyzeTextEmotion, playAssistantAudio, sendAssistantMessage, systemState],
   );
 
   const handleSubmit = (event: FormEvent) => {
@@ -114,19 +214,87 @@ export const AssistantPanel = () => {
       return;
     }
 
+    const startBrowserSpeechCapture = () => {
+      const SpeechRecognition =
+        (window as WindowWithSpeechRecognition).SpeechRecognition ||
+        (window as WindowWithSpeechRecognition).webkitSpeechRecognition;
+
+      if (!SpeechRecognition) {
+        addLog('ERROR: Speech recognition is unavailable in this browser.');
+        addAssistantNotice('Microphone input is unavailable in this browser. You can still type your message and I will answer with audio.');
+        return false;
+      }
+
+      const recognition = new SpeechRecognition();
+      speechRecognitionRef.current = recognition;
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = navigator.language || 'en-US';
+      recognition.onresult = (event) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const result = event.results[index];
+          const transcript = result[0]?.transcript || '';
+          if (result.isFinal) finalTranscript += transcript;
+          else interimTranscript += transcript;
+        }
+        const visibleTranscript = (finalTranscript || interimTranscript).trim();
+        if (visibleTranscript) setInputValue(visibleTranscript);
+        if (finalTranscript.trim()) void submitMessage(finalTranscript.trim());
+      };
+      recognition.onerror = () => {
+        addLog('ERROR: Browser speech recognition failed.');
+        addAssistantNotice('I could not start microphone transcription. Please check browser microphone permission, or type your message.');
+        stopVoiceCapture();
+      };
+      recognition.onend = () => {
+        if (speechRecognitionRef.current === recognition) {
+          speechRecognitionRef.current = null;
+          setIsListening(false);
+        }
+      };
+
+      try {
+        recognition.start();
+        setIsListening(true);
+        addLog('Browser speech recognition listening.');
+        return true;
+      } catch {
+        addLog('ERROR: Browser speech recognition could not start.');
+        addAssistantNotice('I could not start microphone transcription. Please check browser microphone permission, or type your message.');
+        speechRecognitionRef.current = null;
+        setIsListening(false);
+        return false;
+      }
+    };
+
+    if (humeStatus?.configured !== true) {
+      startBrowserSpeechCapture();
+      return;
+    }
+
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      addLog('ERROR: Browser microphone capture is unavailable.');
+      startBrowserSpeechCapture();
       return;
     }
 
     try {
       const socket = openHumeEviSocket();
       humeSocketRef.current = socket;
+      setIsListening(true);
 
       socket.onmessage = (event) => {
         try {
           const envelope = JSON.parse(event.data);
           const payload = envelope.payload || {};
+          if (envelope.type === 'hume.evi.status' && payload.configured === false) {
+            socket.close();
+            humeSocketRef.current = null;
+            stopMediaResources();
+            startBrowserSpeechCapture();
+            return;
+          }
           if (envelope.type === 'hume.transcription' && payload.text) {
             const transcript = String(payload.text);
             setInputValue(transcript);
@@ -137,6 +305,7 @@ export const AssistantPanel = () => {
               ...prev,
               { id: Date.now(), type: 'ai', text: String(payload.text), state: systemState },
             ]);
+            void playAssistantAudio(String(payload.text));
           }
           if (envelope.type === 'hume.audio_output') {
             const audio = payload.data || payload.audio;
@@ -147,7 +316,14 @@ export const AssistantPanel = () => {
               void player.play().catch(() => undefined);
             }
           }
-          if (envelope.type === 'hume.evi.error') addLog(`ERROR: ${String(payload.message || 'Voice stream failed')}`);
+          if (envelope.type === 'hume.evi.error') {
+            addLog(`ERROR: ${String(payload.message || 'Voice stream failed')}`);
+            addAssistantNotice('Realtime voice could not connect. Falling back to browser microphone transcription.');
+            socket.close();
+            humeSocketRef.current = null;
+            stopMediaResources();
+            startBrowserSpeechCapture();
+          }
         } catch {
           addLog('ERROR: Malformed voice stream event.');
         }
@@ -180,25 +356,40 @@ export const AssistantPanel = () => {
           addLog('Voice stream connected to Hume EVI proxy.');
         } catch {
           addLog('ERROR: Microphone permission or voice stream setup failed.');
-          stopVoiceCapture();
+          stopMediaResources();
+          startBrowserSpeechCapture();
         }
       };
 
       socket.onerror = () => {
         addLog('ERROR: Voice stream socket failed.');
-        stopVoiceCapture();
+        addAssistantNotice('Realtime voice could not connect. Falling back to browser microphone transcription.');
+        humeSocketRef.current = null;
+        stopMediaResources();
+        startBrowserSpeechCapture();
       };
 
       socket.onclose = () => {
-        if (humeSocketRef.current === socket) humeSocketRef.current = null;
+        if (humeSocketRef.current !== socket) return;
+        humeSocketRef.current = null;
         stopMediaResources();
         setIsListening(false);
       };
     } catch {
       addLog('ERROR: Microphone permission or voice stream setup failed.');
-      stopVoiceCapture();
+      startBrowserSpeechCapture();
     }
-  }, [addLog, isListening, stopMediaResources, stopVoiceCapture, submitMessage, systemState]);
+  }, [
+    addAssistantNotice,
+    addLog,
+    humeStatus?.configured,
+    isListening,
+    playAssistantAudio,
+    stopMediaResources,
+    stopVoiceCapture,
+    submitMessage,
+    systemState,
+  ]);
 
   useEffect(() => stopVoiceCapture, [stopVoiceCapture]);
 
@@ -293,7 +484,13 @@ export const AssistantPanel = () => {
             type="text" 
             value={inputValue}
             onChange={(event) => setInputValue(event.target.value)}
-            placeholder={systemState === 'OVERLOAD' ? "System managing tasks. Input restricted." : "Synthesize your intent..."}
+            placeholder={
+              systemState === 'OVERLOAD'
+                ? "System managing tasks. Input restricted."
+                : isListening
+                  ? "Listening..."
+                  : "Synthesize your intent..."
+            }
             disabled={systemState === 'OVERLOAD'}
             className="w-full bg-white/5 border border-white/10 rounded-xl py-3 pl-4 pr-24 text-sm focus:outline-none focus:border-[#00f0ff]/50 transition-colors disabled:opacity-50"
           />

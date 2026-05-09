@@ -167,7 +167,7 @@ class EmotionAnalysisEngine:
             stress_probability=round(stress_probability, 3),
             face_detected=face_box is not None,
             landmarks_detected=landmarks_detected,
-            source="webcam",
+            source="webcam-face-mesh" if landmarks_detected else "webcam-face-detection" if face_box is not None else "webcam-no-face",
             eye_openness=round(mesh_result["eye_open"], 3) if mesh_result else None,
             mouth_open=round(mesh_result["mouth_open"], 3) if mesh_result else None,
             brow_lift=round(mesh_result["brow_lift"], 3) if mesh_result else None,
@@ -271,8 +271,8 @@ class EmotionAnalysisEngine:
             mouth_open * 0.28
             + brow_lift * 0.24
             + (1.0 - mouth_curve) * 0.22
-            + fatigue_level * 0.12
-            + state.stress_level / 100.0 * 0.14,
+            + fatigue_level * 0.16
+            + max(0.0, 0.42 - eye_open) * 0.1,
             0.0,
             1.0,
         )

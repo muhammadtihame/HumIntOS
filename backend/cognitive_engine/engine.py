@@ -109,17 +109,54 @@ class CognitiveStateEngine:
             self._assistant_style = assistant_style
             return self._snapshot_unlocked()
 
-    async def apply_emotion_analysis(self, emotion: str, attention_score: float, fatigue_level: float, stress_probability: float) -> CognitiveState:
+    async def apply_emotion_analysis(
+        self,
+        emotion: str,
+        attention_score: float,
+        fatigue_level: float,
+        stress_probability: float,
+        *,
+        face_detected: bool = False,
+        landmarks_detected: bool = False,
+        face_confidence: Optional[float] = None,
+        eye_openness: Optional[float] = None,
+        mouth_open: Optional[float] = None,
+        brow_lift: Optional[float] = None,
+        mouth_curve: Optional[float] = None,
+        gaze_x: Optional[float] = None,
+        gaze_y: Optional[float] = None,
+    ) -> CognitiveState:
         async with self._lock:
             attention = clamp(attention_score * 100.0)
             fatigue = clamp(fatigue_level * 100.0)
             stress = clamp(stress_probability * 100.0)
+            confidence = clamp((face_confidence if face_confidence is not None else 0.5 if face_detected else 0.0) * 100.0)
+            eye = clamp((eye_openness if eye_openness is not None else 0.5) * 100.0)
+            mouth = clamp((mouth_open if mouth_open is not None else 0.0) * 100.0)
+            brow = clamp((brow_lift if brow_lift is not None else 0.0) * 100.0)
+            smile = clamp((mouth_curve if mouth_curve is not None else 0.5) * 100.0)
+            gaze_deviation = 0.0
+            if gaze_x is not None and gaze_y is not None:
+                gaze_deviation = clamp((((gaze_x**2 + gaze_y**2) ** 0.5) / (2.0**0.5)) * 100.0)
 
             self._targets["focus_level"] = lerp(self._targets["focus_level"], attention, 0.42)
             self._targets["fatigue"] = lerp(self._targets["fatigue"], fatigue, 0.35)
             self._targets["stress_level"] = lerp(self._targets["stress_level"], stress, 0.38)
-            self._targets["cognitive_load"] += (stress - 50.0) * 0.16
-            self._targets["distraction_probability"] += (50.0 - attention) * 0.16
+
+            face_quality = confidence if face_detected else 0.0
+            expression_tension = clamp(brow * 0.36 + mouth * 0.22 + (100.0 - smile) * 0.26 + stress * 0.16)
+            inferred_load = clamp(stress * 0.44 + expression_tension * 0.25 + fatigue * 0.16 + gaze_deviation * 0.15)
+            inferred_distraction = clamp((100.0 - attention) * 0.42 + gaze_deviation * 0.42 + (100.0 - face_quality) * 0.16)
+            inferred_consistency = clamp(face_quality * 0.38 + attention * 0.38 + (100.0 - gaze_deviation) * 0.24)
+            inferred_engagement = clamp(attention * 0.62 + eye * 0.18 + face_quality * 0.14 + max(0.0, smile - 42.0) * 0.06)
+            inferred_hesitation = clamp(expression_tension * 0.42 + gaze_deviation * 0.22 + (100.0 - face_quality) * 0.2 + max(0.0, 42.0 - eye) * 0.16)
+
+            self._targets["cognitive_load"] = lerp(self._targets["cognitive_load"], inferred_load, 0.44 if face_detected else 0.28)
+            self._targets["distraction_probability"] = lerp(self._targets["distraction_probability"], inferred_distraction, 0.42)
+            self._targets["behavioral_consistency"] = lerp(self._targets["behavioral_consistency"], inferred_consistency, 0.36)
+            self._targets["engagement_level"] = lerp(self._targets["engagement_level"], inferred_engagement, 0.4)
+            self._targets["hesitation_level"] = lerp(self._targets["hesitation_level"], inferred_hesitation, 0.36)
+            self._targets["intent_confidence"] = lerp(self._targets["intent_confidence"], clamp(face_quality * 0.42 + attention * 0.4 + (100.0 - stress) * 0.18), 0.32)
 
             if emotion in {"angry", "fear", "sad", "stressed"}:
                 self._targets["stress_level"] += 8.0
@@ -131,6 +168,9 @@ class CognitiveStateEngine:
 
             self._normalize_targets_unlocked()
             self._emotion = emotion
+            immediate_pull = 0.56 if landmarks_detected else 0.42 if face_detected else 0.24
+            for key in COGNITIVE_KEYS:
+                self._values[key] = lerp(self._values[key], self._targets[key], immediate_pull)
             return self._snapshot_unlocked()
 
     async def apply_hume_signals(self, signals: HumeEmotionSignals) -> CognitiveState:

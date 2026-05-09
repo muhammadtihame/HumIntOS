@@ -16,6 +16,19 @@ type GazePoint = {
 
 const CALIBRATION_DURATION_MS = 25_000;
 const GAZE_DISPLAY_RANGE = 40;
+const BEHAVIOR_SAMPLE_MS = 3000;
+
+type InteractionSample = {
+  pointerX: number | null;
+  pointerY: number | null;
+  mouseMovement: number;
+  clickCount: number;
+  keyCount: number;
+  correctionCount: number;
+  windowFocusChanges: number;
+  lastActivityAt: number;
+  sampleStartedAt: number;
+};
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const clamp01 = (value: number) => clamp(value, 0, 1);
@@ -60,6 +73,18 @@ const microExpressionLabel = (emotion: EmotionAnalysisResponse | null) => {
   return 'neutral gaze';
 };
 
+const createInteractionSample = (): InteractionSample => ({
+  pointerX: null,
+  pointerY: null,
+  mouseMovement: 0,
+  clickCount: 0,
+  keyCount: 0,
+  correctionCount: 0,
+  windowFocusChanges: 0,
+  lastActivityAt: performance.now(),
+  sampleStartedAt: performance.now(),
+});
+
 export const WebcamPanel = () => {
   const {
     data,
@@ -74,7 +99,7 @@ export const WebcamPanel = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const gazeRef = useRef<GazePoint>({ x: 0, y: 0, confidence: 0, source: 'pending' });
-  const dataRef = useRef(data);
+  const interactionRef = useRef<InteractionSample>(createInteractionSample());
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>('starting');
   const [analysisSource, setAnalysisSource] = useState('syncing');
   const [gaze, setGaze] = useState<GazePoint>({ x: 0, y: 0, confidence: 0, source: 'pending' });
@@ -82,12 +107,57 @@ export const WebcamPanel = () => {
   const [calibrationProgress, setCalibrationProgress] = useState(0);
 
   useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
-
-  useEffect(() => {
     gazeRef.current = gaze;
   }, [gaze]);
+
+  useEffect(() => {
+    const markActivity = () => {
+      interactionRef.current.lastActivityAt = performance.now();
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const sample = interactionRef.current;
+      if (sample.pointerX !== null && sample.pointerY !== null) {
+        sample.mouseMovement += Math.hypot(event.clientX - sample.pointerX, event.clientY - sample.pointerY);
+      }
+      sample.pointerX = event.clientX;
+      sample.pointerY = event.clientY;
+      markActivity();
+    };
+
+    const handleClick = () => {
+      interactionRef.current.clickCount += 1;
+      markActivity();
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      interactionRef.current.keyCount += 1;
+      if (event.key === 'Backspace' || event.key === 'Delete') {
+        interactionRef.current.correctionCount += 1;
+      }
+      markActivity();
+    };
+
+    const handleVisibilityChange = () => {
+      interactionRef.current.windowFocusChanges += 1;
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    window.addEventListener('click', handleClick, { passive: true });
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('focus', handleVisibilityChange);
+    window.addEventListener('blur', handleVisibilityChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('click', handleClick);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('focus', handleVisibilityChange);
+      window.removeEventListener('blur', handleVisibilityChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (cameraStatus !== 'active') {
@@ -191,31 +261,47 @@ export const WebcamPanel = () => {
   useEffect(() => {
     const interval = window.setInterval(() => {
       const currentGaze = gazeRef.current;
-      const currentData = dataRef.current;
       const gazeDeviation = Math.min(1, Math.hypot(currentGaze.x, currentGaze.y) / Math.SQRT2);
       const hasBackendGaze = currentGaze.source !== 'pending' && currentGaze.source !== 'unavailable';
+      const sample = interactionRef.current;
+      const now = performance.now();
+      const sampleMinutes = Math.max(0.01, (now - sample.sampleStartedAt) / 60000);
+      const inactivitySeconds = Math.max(0, (now - sample.lastActivityAt) / 1000);
+      const typingSpeed = sample.keyCount / sampleMinutes;
+      const clickFrequency = sample.clickCount / sampleMinutes;
+      const correctionRate = sample.correctionCount / sampleMinutes;
+      const mouseVelocity = sample.mouseMovement / Math.max(0.1, (now - sample.sampleStartedAt) / 1000);
+      const hesitationFromFace = currentGaze.confidence > 0 ? (1 - currentGaze.confidence) * 450 : 0;
+
       void sendBehaviorTelemetry({
-        typing_speed: Math.max(0, currentData.focusLevel * 1.55),
-        mouse_movement: gazeDeviation * 900,
-        mouse_velocity: gazeDeviation * 680,
-        click_frequency: currentData.stressLevel > 70 ? 22 : 8,
-        inactivity_seconds: gazeDeviation > 0.72 ? 7 : 0.6,
-        tab_switches: gazeDeviation > 0.78 ? 1 : 0,
-        hesitation_ms: currentData.hesitationLevel * 18,
-        window_focus_changes: document.hasFocus() ? 0 : 1,
-        correction_rate: Math.max(0, currentData.cognitiveLoad - currentData.focusLevel) / 5,
+        typing_speed: typingSpeed,
+        mouse_movement: sample.mouseMovement,
+        mouse_velocity: mouseVelocity,
+        click_frequency: clickFrequency,
+        inactivity_seconds: inactivitySeconds,
+        tab_switches: document.visibilityState === 'hidden' ? 1 : 0,
+        hesitation_ms: Math.max(inactivitySeconds * 120, hesitationFromFace),
+        window_focus_changes: sample.windowFocusChanges + (document.hasFocus() ? 0 : 1),
+        correction_rate: correctionRate,
         gaze_x: hasBackendGaze ? currentGaze.x : null,
         gaze_y: hasBackendGaze ? currentGaze.y : null,
         gaze_deviation: gazeDeviation,
         eye_tracking_confidence: currentGaze.confidence,
         metadata: {
-          source: 'backend_face_mesh',
+          source: 'live_interaction_and_backend_face_mesh',
           gaze_source: currentGaze.source,
           camera_status: cameraStatus,
           connection_status: connectionStatus,
         },
       });
-    }, 3000);
+
+      interactionRef.current = {
+        ...createInteractionSample(),
+        pointerX: sample.pointerX,
+        pointerY: sample.pointerY,
+        lastActivityAt: sample.lastActivityAt,
+      };
+    }, BEHAVIOR_SAMPLE_MS);
 
     return () => window.clearInterval(interval);
   }, [cameraStatus, connectionStatus, sendBehaviorTelemetry]);
@@ -273,7 +359,7 @@ export const WebcamPanel = () => {
         <video
           ref={videoRef}
           className={cn(
-            "absolute inset-0 h-full w-full object-cover opacity-40 mix-blend-luminosity filter contrast-150 brightness-50",
+            "absolute inset-0 h-full w-full object-cover opacity-80 filter contrast-110 brightness-90 saturate-110",
             cameraStatus !== 'active' && "hidden"
           )}
           muted

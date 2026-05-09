@@ -83,6 +83,15 @@ class SystemOrchestrator:
             attention_score=analysis.attention_score,
             fatigue_level=analysis.fatigue_level,
             stress_probability=analysis.stress_probability,
+            face_detected=analysis.face_detected,
+            landmarks_detected=analysis.landmarks_detected,
+            face_confidence=analysis.face_confidence,
+            eye_openness=analysis.eye_openness,
+            mouth_open=analysis.mouth_open,
+            brow_lift=analysis.brow_lift,
+            mouth_curve=analysis.mouth_curve,
+            gaze_x=analysis.gaze_x,
+            gaze_y=analysis.gaze_y,
         )
         decision = self.adaptive.evaluate(updated_state)
         updated_state = await self.cognition.set_adaptive_mode(decision.mode, decision.assistant_style)

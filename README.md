@@ -1,15 +1,17 @@
-# HumIntOS: Cinematic Adaptive AI Interface
+# HumIntOS: AI for Human Intention Alignment & Cognitive Awareness
 
-HumIntOS is a hackathon-ready, real-time platform that creates a responsive and intelligent interface by simulating and ingesting cognitive, emotional, and behavioral signals. It computes adaptive UI modes dynamically and streams the state of the entire system over WebSockets, allowing the interface to respond to the user's focus, stress, or cognitive load in real-time.
+HumIntOS is an advanced, real-time platform designed to create a highly responsive and intelligent user interface by continuously ingesting and analyzing cognitive, emotional, and behavioral signals. It dynamically computes adaptive UI modes and streams the state of the entire system over WebSockets, enabling the interface to intelligently adapt to the user's focus levels, stress indicators, and cognitive load in real-time. 
+
+The core philosophy and architectural design of this project are deeply rooted in **Cognitive Load Theory (CLT)**, which posits that human working memory has limited capacity. HumIntOS aims to optimize this capacity by adjusting the system's complexity, visual presentation, and interaction models to match the user's current cognitive state, thereby enhancing productivity, reducing fatigue, and creating a more symbiotic human-computer interaction.
 
 ## 🚀 Key Features
 
-- **Real-Time Telemetry & Emotion Analysis:** Uses computer vision to track user focus, stress markers, gaze deviation, and micro-expressions.
-- **Cognitive State Engine:** Fuses webcam data, behavioral updates (typing speed, mouse movement), and AI emotion tracking to estimate the user's cognitive state continuously.
-- **Adaptive UI Modes:** The interface seamlessly shifts into `focus_mode`, `stress_mode`, `cognitive_overload_mode`, or `normal_mode` to provide optimal user support and aesthetic experience.
-- **Hume AI Integration:** Incorporates Hume EVI for voice-based emotion measurement and Hume Expression Measurement for text/audio analysis.
-- **Context-Aware Assistant:** An integrated assistant that tailors its response tone (calm, direct, simplified) based on the user's current stress and cognitive load.
-- **Interactive Demo Capabilities:** Ready-to-use demo triggers that transition the system into specific cognitive states instantly for presentations.
+- **Real-Time Telemetry & Emotion Analysis:** Leverages advanced computer vision to continuously monitor and track user focus, stress markers, gaze deviation, and micro-expressions.
+- **Cognitive State Engine:** Intelligently fuses multi-modal data including webcam feeds, behavioral telemetry (such as typing speed and cursor movement), and AI-driven emotion tracking to provide a continuous estimation of the user's cognitive state.
+- **Adaptive UI Modes:** The interface autonomously transitions between states such as `focus_mode`, `stress_mode`, `cognitive_overload_mode`, or `normal_mode`, ensuring optimal user support and a tailored aesthetic experience based on current mental load.
+- **Hume AI Integration:** Seamlessly incorporates Hume EVI for sophisticated voice-based emotion measurement and Hume Expression Measurement for in-depth text and audio analysis.
+- **Context-Aware Assistant:** Features an integrated intelligent assistant capable of dynamically tailoring its response tone (e.g., calm, direct, or simplified) in direct response to the user's real-time stress and cognitive load metrics.
+- **System State Simulation:** Includes comprehensive simulation and demonstration capabilities, allowing developers to instantly transition the system into specific cognitive states for testing, presentations, and integration validation.
 
 ## 🏗️ Architecture
 

@@ -1,0 +1,13 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.6.0
+httpx>=0.27.0
+python-dotenv>=1.0.1
+openai>=1.30.0
+numpy>=1.26.0
+opencv-python-headless>=4.9.0
+mediapipe>=0.10.14
+
+# Optional emotion classifier. Install when your Python/TensorFlow stack supports it:
+# fer>=22.5.1
+
